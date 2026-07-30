@@ -39,6 +39,7 @@ MODULE_LICENSE("GPL v2");
 struct backlight_device* gigabyte_kbd_backlight_device;
 struct device_driver* gigabyte_kbd_touchpad_driver;
 struct device* gigabyte_kbd_touchpad_device;
+struct input_dev* gigabyte_kbd_input_device;
 
 static inline int gigabyte_kbd_is_backlight_off(void)
 {
@@ -130,6 +131,15 @@ static int gigabyte_kbd_raw_event(struct hid_device *hdev, struct hid_report *re
 				schedule_work(&gigabyte_kbd_touchpad_toggle_driver_work);
 			}
 			return 0;
+		case HIDRAW_FN_F11:
+			if (gigabyte_kbd_input_device)
+			{
+				input_report_key(gigabyte_kbd_input_device, KEY_RFKILL, 1);
+				input_sync(gigabyte_kbd_input_device);
+				input_report_key(gigabyte_kbd_input_device, KEY_RFKILL, 0);
+				input_sync(gigabyte_kbd_input_device);
+			}
+			return 0;
 		default:
 			return 0;
 			break;
@@ -170,6 +180,7 @@ static int gigabyte_kbd_probe(struct hid_device *hdev, const struct hid_device_i
 {
 	printk("Gigabyte kbd driver loaded.");
 	int ret;
+	struct hid_input *hidinput;
 	hdev->quirks |= HID_QUIRK_INPUT_PER_APP;
 
 	ret = hid_parse(hdev);
@@ -188,7 +199,21 @@ static int gigabyte_kbd_probe(struct hid_device *hdev, const struct hid_device_i
 		printk(KERN_ERR "Touchpad acpi device not found");
 	}
 
-	return hid_hw_start(hdev, HID_CONNECT_DEFAULT);
+	ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
+	if (ret)
+		return ret;
+
+	// Advertise KEY_RFKILL so we can report the Fn+F11 airplane-mode
+	// press to userspace, which owns the actual soft/hard-block policy
+	// via rfkill (there is no in-kernel "toggle all radios" API anymore).
+	list_for_each_entry(hidinput, &hdev->inputs, list)
+	{
+		input_set_capability(hidinput->input, EV_KEY, KEY_RFKILL);
+		if (!gigabyte_kbd_input_device)
+			gigabyte_kbd_input_device = hidinput->input;
+	}
+
+	return 0;
 }
 
 static const struct hid_device_id gigabyte_kbd_devices[] = {
